@@ -169,6 +169,23 @@ class PythonEngineWheelTests(unittest.TestCase):
 
         self.assertTrue(mocked_open.call_args.args[1] & binary_flag)
 
+    def test_windows_launcher_waits_for_native_engine(self):
+        wheel = self.build()
+        with zipfile.ZipFile(wheel) as archive:
+            launcher = archive.read(
+                "thinkery_leanctx_engine/launcher.py"
+            ).decode("utf-8")
+
+        windows_wait = (
+            'if os.name == "nt":\n'
+            '        raise SystemExit('
+            'subprocess.call([path, *sys.argv[1:]], shell=False))'
+        )
+        self.assertIn("import subprocess", launcher)
+        self.assertIn(windows_wait, launcher)
+        self.assertIn("os.execv(path, [path, *sys.argv[1:]])", launcher)
+        self.assertLess(launcher.index(windows_wait), launcher.index("os.execv("))
+
     def test_release_uses_system_allocator_on_musl(self):
         manifest = (ROOT / "rust" / "Cargo.toml").read_text(encoding="utf-8")
         self.assertIn(
