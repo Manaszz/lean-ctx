@@ -677,7 +677,14 @@ fn partner_promo_is_accessible_versioned_and_served() {
     assert_eq!(status, "200 OK");
     assert_eq!(content_type, "application/javascript; charset=utf-8");
     assert!(COCKPIT_INDEX_HTML.contains("/static/components/cockpit-partner-promo.js"));
-    assert!(source.contains("leanctx_partner_sdk_promo_v1"));
+    // Campaign v2 (#feedback): the key is versioned so a new invitation reaches
+    // people who dismissed the previous one. Pinning the literal is deliberate —
+    // shipping a campaign without bumping it would silently reach nobody.
+    assert!(source.contains("leanctx_feedback_survey_v2"));
+    assert!(
+        !source.contains("leanctx_partner_sdk_promo_v1"),
+        "the previous campaign key must not linger — it would suppress v2"
+    );
     assert!(source.contains("aria-modal=\"true\""));
     assert!(source.contains("aria-labelledby=\"partnerPromoTitle\""));
     assert!(source.contains("event.key === 'Escape'"));
@@ -691,10 +698,38 @@ fn partner_promo_is_accessible_versioned_and_served() {
     assert!(source.contains("opens in a new tab"));
     assert!(source.contains("target=\"_blank\" rel=\"noopener noreferrer\""));
     assert!(source.contains("Thinkery-AG/leanctx-sdk#readme"));
+    // The design-partner solicitation is gone on purpose: it asked the reader
+    // for a commitment before asking them anything, and it occupied the one
+    // modal available. Asserting its absence keeps it from drifting back in.
     assert!(
-        source.contains("mailto:yves@thinkery.ch?subject=LeanCTX%20design%20partner%20inquiry")
+        !source.contains("mailto:"),
+        "campaign v2 asks a question; it does not solicit"
     );
-    assert!(source.contains("local LeanCTX Engine"));
+    assert!(
+        !source.to_lowercase().contains("design partner"),
+        "the v1 solicitation must stay out"
+    );
+
+    // What v2 does instead: three free-text questions plus one grouping choice.
+    for question in ["use_case", "likes_most", "wishes"] {
+        assert!(source.contains(question), "missing question: {question}");
+    }
+    for frequency in ["daily", "weekly", "occasionally"] {
+        assert!(source.contains(frequency), "missing frequency: {frequency}");
+    }
+    assert!(source.contains("/api/feedback"));
+
+    // The destination is named before the button that reaches it, not after.
+    let notice = source
+        .find("Sending transmits")
+        .expect("the transmission notice must be present");
+    let button = source
+        .find("Send feedback")
+        .expect("the send button must be present");
+    assert!(
+        notice < button,
+        "the notice must precede the button that sends"
+    );
 
     let rewritten = super::base_path::rewrite_asset_urls(COCKPIT_INDEX_HTML, "/dashboard");
     assert!(rewritten.contains("src=\"/dashboard/static/components/cockpit-partner-promo.js\""));
