@@ -1,11 +1,25 @@
 /**
- * One-time design-partner and SDK invitation for the local dashboard.
- * The campaign key is versioned so future invitations can be shown once.
+ * One-time invitation shown once per campaign in the local dashboard.
+ *
+ * Campaign v2 asks how people actually use LeanCTX and keeps the SDK pointer.
+ * The design-partner solicitation from v1 is gone: a cold "email us to roll
+ * this out" in a local tool asks the reader for a commitment before we have
+ * asked them anything, and it competed with the one question that is worth a
+ * modal — what they use it for and what is missing.
+ *
+ * The storage key is versioned exactly so a new campaign reaches people who
+ * dismissed the previous one; bumping it here is what makes v2 appear.
+ *
+ * Sending is deliberate and one-way: nothing leaves the machine until the
+ * button is pressed, and the notice above it says where the answers go before
+ * they go there. The same form lives permanently in Settings
+ * (`cockpit-feedback`) for anyone who dismisses this and wants it later.
  */
 (function () {
   'use strict';
 
-  var STORAGE_KEY = 'leanctx_partner_sdk_promo_v1';
+  var STORAGE_KEY = 'leanctx_feedback_survey_v2';
+  var MAX_ANSWER = 2000;
   var OVERLAY_ID = 'leanctxPartnerPromo';
   var previousFocus = null;
   var backgroundState = [];
@@ -129,6 +143,47 @@
     if (focusable.length) focusable[0].focus();
   }
 
+  /* Three of the four are free text on purpose: a fixed list of features can
+     only return the answers it already contains, and the point is to learn
+     which use cases exist. Frequency is the one multiple choice, and it is what
+     makes the free text groupable — "what is missing" from a daily user and
+     from someone who installed it yesterday are different wishes. */
+  var QUESTIONS = [
+    { id: 'use_case', label: 'What do you use LeanCTX for?', rows: 2 },
+    { id: 'likes_most', label: 'What do you like most about it?', rows: 2 },
+    { id: 'wishes', label: 'What is missing?', rows: 2 }
+  ];
+
+  var FREQUENCIES = [
+    { id: 'daily', label: 'Daily' },
+    { id: 'weekly', label: 'Weekly' },
+    { id: 'occasionally', label: 'Occasionally' },
+    { id: 'new', label: 'Just started' }
+  ];
+
+  function escapeHtml(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, function (ch) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch];
+    });
+  }
+
+  function questionFields() {
+    return QUESTIONS.map(function (q) {
+      return '<label class="promo-field">' +
+        '<span class="promo-field-label">' + escapeHtml(q.label) + '</span>' +
+        '<textarea id="promoFb-' + q.id + '" rows="' + q.rows + '" ' +
+          'maxlength="' + MAX_ANSWER + '"></textarea>' +
+        '</label>';
+    }).join('');
+  }
+
+  function frequencyChips() {
+    return FREQUENCIES.map(function (f) {
+      return '<button type="button" class="promo-chip" data-freq="' + escapeHtml(f.id) + '" ' +
+        'aria-pressed="false">' + escapeHtml(f.label) + '</button>';
+    }).join('');
+  }
+
   function createOverlay() {
     var overlay = document.createElement('div');
     overlay.id = OVERLAY_ID;
@@ -136,33 +191,110 @@
     overlay.innerHTML =
       '<section class="partner-promo" role="dialog" aria-modal="true" ' +
         'aria-labelledby="partnerPromoTitle" aria-describedby="partnerPromoDescription">' +
-        '<button type="button" class="partner-promo-close" aria-label="Dismiss invitation">&times;</button>' +
-        '<div class="partner-promo-kicker">BUILD WITH LEANCTX</div>' +
-        '<h2 id="partnerPromoTitle">Take LeanCTX further</h2>' +
+        '<button type="button" class="partner-promo-close" aria-label="Dismiss">&times;</button>' +
+        '<div class="partner-promo-kicker">HELP SHAPE LEANCTX</div>' +
+        '<h2 id="partnerPromoTitle">How do you use LeanCTX?</h2>' +
         '<p id="partnerPromoDescription" class="partner-promo-intro">' +
-          'We are looking for design partners and engineering teams ready to deploy LeanCTX in real workflows.' +
+          'Four questions, all optional. What you write here decides what gets built next.' +
         '</p>' +
-        '<div class="partner-promo-options">' +
-          '<article class="partner-promo-option">' +
-            '<span class="partner-promo-index" aria-hidden="true">01</span>' +
-            '<h3>Roll out LeanCTX</h3>' +
-            '<p>Work with us on integrations, governance, rollout and measurable context efficiency for your organization.</p>' +
-            '<a class="partner-promo-cta partner-promo-cta-primary" ' +
-              'href="mailto:yves@thinkery.ch?subject=LeanCTX%20design%20partner%20inquiry">' +
-              'Email yves@thinkery.ch <span aria-hidden="true">&rarr;</span></a>' +
-          '</article>' +
-          '<article class="partner-promo-option">' +
-            '<span class="partner-promo-index" aria-hidden="true">02</span>' +
-            '<h3>Build your own agent</h3>' +
-            '<p>Use the Python SDK with the local LeanCTX Engine to build custom, token-efficient agent workflows.</p>' +
-            '<a class="partner-promo-cta" href="https://github.com/Thinkery-AG/leanctx-sdk#readme" ' +
-              'target="_blank" rel="noopener noreferrer">Explore the SDK <span aria-hidden="true">&rarr;</span>' +
-              '<span class="partner-promo-sr-only"> (opens in a new tab)</span></a>' +
-          '</article>' +
+        '<div class="promo-form">' +
+          questionFields() +
+          '<div class="promo-field">' +
+            '<span class="promo-field-label">How often do you use it?</span>' +
+            '<div class="promo-chips">' + frequencyChips() + '</div>' +
+          '</div>' +
         '</div>' +
-        '<button type="button" class="partner-promo-later">Dismiss</button>' +
+        /* Said before the button, not after: pressing send is the moment
+           something leaves this machine. */
+        '<p class="promo-note">Sending transmits these answers, your LeanCTX version and the ' +
+          'anonymous installation id to leanctx.com. Nothing else, and nothing until you press it.</p>' +
+        '<div class="promo-actions">' +
+          '<button type="button" class="partner-promo-cta partner-promo-cta-primary" id="promoFbSend">' +
+            'Send feedback</button>' +
+          '<a class="partner-promo-cta" href="https://github.com/Thinkery-AG/leanctx-sdk#readme" ' +
+            'target="_blank" rel="noopener noreferrer">Explore the SDK <span aria-hidden="true">&rarr;</span>' +
+            '<span class="partner-promo-sr-only"> (opens in a new tab)</span></a>' +
+        '</div>' +
+        '<p class="promo-status" id="promoFbStatus" role="status" aria-live="polite"></p>' +
+        '<button type="button" class="partner-promo-later">Not now</button>' +
       '</section>';
     return overlay;
+  }
+
+  function collectAnswers(overlay) {
+    var body = {};
+    QUESTIONS.forEach(function (q) {
+      var el = overlay.querySelector('#promoFb-' + q.id);
+      body[q.id] = el ? el.value : '';
+    });
+    var active = overlay.querySelector('.promo-chip[aria-pressed="true"]');
+    body.frequency = active ? active.getAttribute('data-freq') : '';
+    return body;
+  }
+
+  function wireForm(overlay) {
+    overlay.querySelectorAll('.promo-chip').forEach(function (chip) {
+      chip.addEventListener('click', function () {
+        var on = chip.getAttribute('aria-pressed') === 'true';
+        overlay.querySelectorAll('.promo-chip').forEach(function (other) {
+          other.setAttribute('aria-pressed', 'false');
+        });
+        // Clicking the active choice clears it: the question is optional and
+        // there is otherwise no way back to "I would rather not say".
+        chip.setAttribute('aria-pressed', on ? 'false' : 'true');
+      });
+    });
+
+    var send = overlay.querySelector('#promoFbSend');
+    var status = overlay.querySelector('#promoFbStatus');
+    if (!send || !status) return;
+
+    send.addEventListener('click', async function () {
+      var body = collectAnswers(overlay);
+      var answered = ['use_case', 'likes_most', 'wishes'].some(function (id) {
+        return String(body[id] || '').trim() !== '';
+      });
+      if (!answered) {
+        status.textContent = 'Answer at least one question before sending.';
+        status.className = 'promo-status is-error';
+        return;
+      }
+
+      var apiFetch = window.LctxApi && window.LctxApi.apiFetch;
+      if (!apiFetch) {
+        status.textContent = 'Dashboard API unavailable — reload the page.';
+        status.className = 'promo-status is-error';
+        return;
+      }
+
+      send.disabled = true;
+      status.textContent = 'Sending…';
+      status.className = 'promo-status';
+      try {
+        var res = await apiFetch('/api/feedback', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        var data = null;
+        try { data = await res.json(); } catch (_) { data = null; }
+        if (res && res.ok) {
+          // Only a successful send counts as done — a failed one must not
+          // burn the campaign and lose what was typed.
+          status.textContent = 'Sent — thank you.';
+          status.className = 'promo-status is-ok';
+          setTimeout(function () { dismiss(); }, 1200);
+          return;
+        }
+        status.textContent = 'Not sent: ' + ((data && (data.error || data.message)) || 'the server refused it');
+        status.className = 'promo-status is-error';
+      } catch (e) {
+        status.textContent = 'Not sent: ' + (e && e.message ? e.message : 'network error');
+        status.className = 'promo-status is-error';
+      } finally {
+        send.disabled = false;
+      }
+    });
   }
 
   function show() {
@@ -175,9 +307,13 @@
 
     overlay.querySelector('.partner-promo-close').addEventListener('click', dismiss);
     overlay.querySelector('.partner-promo-later').addEventListener('click', dismiss);
-    overlay.querySelectorAll('.partner-promo-cta').forEach(function (link) {
+    // Only the outbound SDK link dismisses on click. The send button must not:
+    // it dismisses itself after a *successful* send, so a failed one keeps the
+    // dialog and the text the person just typed.
+    overlay.querySelectorAll('a.partner-promo-cta').forEach(function (link) {
       link.addEventListener('click', dismiss);
     });
+    wireForm(overlay);
     overlay.addEventListener('click', function (event) {
       if (event.target === overlay) dismiss();
     });

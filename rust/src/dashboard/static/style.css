@@ -1415,6 +1415,30 @@ tr:hover td{background:var(--surface-2)}
   color:var(--muted);font-size:11.5px;cursor:pointer;
 }
 .partner-promo-later:hover{color:var(--text-bright)}
+/* Survey fields inside the invitation dialog (campaign v2). Reuses the promo
+   tokens so the form is the same object visually, not a second style. */
+.promo-form{display:flex;flex-direction:column;gap:14px;margin-bottom:18px}
+.promo-field{display:flex;flex-direction:column;gap:6px}
+.promo-field-label{color:var(--text-bright);font-size:12.5px;font-weight:600}
+.promo-field textarea{
+  width:100%;background:var(--bg);color:inherit;border:1px solid var(--border);
+  border-radius:6px;padding:8px 10px;font:inherit;font-size:12.5px;resize:vertical;
+}
+.promo-field textarea:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.promo-chips{display:flex;gap:6px;flex-wrap:wrap}
+.promo-chip{
+  border:1px solid var(--border);background:transparent;color:var(--muted);
+  border-radius:99px;padding:5px 12px;font:inherit;font-size:12px;cursor:pointer;
+}
+.promo-chip:hover{border-color:var(--border-light);color:var(--text-bright)}
+.promo-chip[aria-pressed="true"]{border-color:var(--accent);background:var(--accent-dim);color:var(--accent)}
+.promo-chip:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+.promo-note{margin:0 0 14px;color:var(--muted);font-size:11.5px;line-height:1.5}
+.promo-actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.promo-actions .partner-promo-cta{cursor:pointer}
+.promo-status{margin:10px 0 0;min-height:1em;font-size:12px;color:var(--muted)}
+.promo-status.is-ok{color:var(--green)}
+.promo-status.is-error{color:var(--red)}
 .partner-promo-sr-only{
   position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
   clip:rect(0,0,0,0);white-space:nowrap;border:0;
