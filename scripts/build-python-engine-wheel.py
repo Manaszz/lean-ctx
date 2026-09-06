@@ -83,6 +83,7 @@ import hashlib
 from importlib.resources import files
 import os
 import stat
+import subprocess
 import sys
 
 EXPECTED_SHA256 = "{expected_sha256}"
@@ -102,6 +103,8 @@ def main() -> None:
         raise RuntimeError("bundled LeanCTX Engine failed integrity verification")
     if os.name != "nt" and not os.access(path, os.X_OK):
         raise RuntimeError("bundled LeanCTX Engine is not executable")
+    if os.name == "nt":
+        raise SystemExit(subprocess.call([path, *sys.argv[1:]], shell=False))
     os.execv(path, [path, *sys.argv[1:]])
 '''
     return source.encode("utf-8")
