@@ -277,6 +277,24 @@ jobs:
         working-directory: rust
         run: cargo fmt --check
 
+  npm-postinstall:
+    name: npm postinstall (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Test stdio isolation
+        run: node packages/lean-ctx-bin/postinstall.test.cjs
+
   cookbook:
     name: Cookbook (Node)
     runs-on: ubuntu-latest

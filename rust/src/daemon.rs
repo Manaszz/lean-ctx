@@ -128,7 +128,13 @@ pub fn start_daemon(args: &[String]) -> Result<()> {
         .open(&stderr_log);
     let stderr_cfg = match stderr_file {
         Ok(f) => std::process::Stdio::from(f),
-        Err(_) => std::process::Stdio::inherit(),
+        Err(error) => {
+            eprintln!(
+                "Cannot open {}: {error}; daemon stderr disabled.",
+                stderr_log.display()
+            );
+            std::process::Stdio::null()
+        }
     };
 
     let mut cmd = Command::new(&exe);
