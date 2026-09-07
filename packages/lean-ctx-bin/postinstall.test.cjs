@@ -8,6 +8,7 @@ const vm = require("node:vm");
 const assert = require("node:assert/strict");
 const { execSync, spawn } = require("node:child_process");
 const { once } = require("node:events");
+const { setTimeout: delay } = require("node:timers/promises");
 
 const postinstall = path.join(__dirname, "postinstall.js");
 
@@ -61,7 +62,19 @@ child.unref();
   } finally {
     clearTimeout(timer);
     fs.writeFileSync(release, "");
-    try { process.kill(Number(fs.readFileSync(pidFile, "utf8"))); } catch {}
+    if (fs.existsSync(pidFile)) {
+      const pid = Number(fs.readFileSync(pidFile, "utf8"));
+      try { process.kill(pid); } catch {}
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline) {
+        try {
+          process.kill(pid, 0);
+          await delay(50);
+        } catch {
+          break;
+        }
+      }
+    }
     try { runner.kill(); } catch {}
     fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10 });
   }
