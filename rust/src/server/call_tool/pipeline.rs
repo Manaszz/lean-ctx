@@ -1178,6 +1178,7 @@ pub(super) fn triage_bypass_requested(
     args: Option<&serde_json::Map<String, serde_json::Value>>,
 ) -> bool {
     name == "ctx_read"
+        || super::super::context_gate::protected_path_requested(args)
         || args.is_some_and(|args| {
             args.get("raw")
                 .and_then(serde_json::Value::as_bool)

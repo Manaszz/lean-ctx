@@ -27,6 +27,13 @@ pub(super) fn is_tool_detected(target: &RulesTarget, home: &std::path::Path) -> 
             codex_dir.exists() || command_exists("codex")
         }
         "Grok" => home.join(".grok").exists() || command_exists("grok"),
+        // #1402: CodeWhale has no rules target (see `targets.rs`) — detection
+        // is kept here so `doctor` and the setup summary can report it.
+        "CodeWhale" => {
+            crate::core::editor_registry::codewhale_dir(home).exists()
+                || crate::core::editor_registry::codewhale_legacy_dir(home).exists()
+                || command_exists("codewhale")
+        }
         "Cursor" => home.join(".cursor").exists(),
         "Windsurf" => home.join(".codeium/windsurf").exists(),
         "Gemini CLI" => home.join(".gemini").exists(),
@@ -44,6 +51,9 @@ pub(super) fn is_tool_detected(target: &RulesTarget, home: &std::path::Path) -> 
         "JetBrains IDEs" => detect_jetbrains_installed(home),
         "Antigravity" => home.join(".gemini/antigravity").exists(),
         "Pi Coding Agent" => home.join(".pi").exists() || command_exists("pi"),
+        "Oh My Pi" => {
+            crate::core::editor_registry::omp_agent_dir(home).exists() || command_exists("omp")
+        }
         "AWS Kiro" => home.join(".kiro").exists(),
         "Crush" => home.join(".config/crush").exists() || command_exists("crush"),
         "Verdent" => home.join(".verdent").exists(),

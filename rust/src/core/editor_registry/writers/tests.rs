@@ -152,6 +152,56 @@ fn cline_cli_config_nests_command_under_transport() {
 }
 
 #[test]
+fn omp_config_uses_native_stdio_schema_preserves_servers_and_is_idempotent() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mcp.json");
+    std::fs::write(
+        &path,
+        r#"{ "disabledServers": ["other"], "mcpServers": { "other": { "command": "other-bin" }, "lean-ctx": { "command": "old", "lifecycle": "lazy" } } }"#,
+    )
+    .unwrap();
+
+    let t = target("Oh My Pi", path.clone(), ConfigType::OmpMcp);
+    let first =
+        write_config_with_options(&t, "/new/path/lean-ctx", WriteOptions::default()).unwrap();
+    assert_eq!(first.action, WriteAction::Updated);
+
+    let json: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(json["disabledServers"], serde_json::json!(["other"]));
+    assert_eq!(json["mcpServers"]["other"]["command"], "other-bin");
+    let entry = &json["mcpServers"]["lean-ctx"];
+    assert_eq!(entry["type"], "stdio");
+    assert_eq!(entry["command"], "/new/path/lean-ctx");
+    assert_eq!(entry["args"], serde_json::json!([]));
+    assert!(entry.get("lifecycle").is_none());
+    assert!(json["$schema"].as_str().unwrap().contains("oh-my-pi"));
+
+    let second =
+        write_config_with_options(&t, "/new/path/lean-ctx", WriteOptions::default()).unwrap();
+    assert_eq!(second.action, WriteAction::Already);
+}
+
+#[test]
+fn omp_config_is_created_with_the_native_stdio_schema() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("agent").join("mcp.json");
+    let t = target("Oh My Pi", path.clone(), ConfigType::OmpMcp);
+
+    let created = write_config_with_options(&t, "/bin/lean-ctx", WriteOptions::default()).unwrap();
+    assert_eq!(created.action, WriteAction::Created);
+
+    let json: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let entry = &json["mcpServers"]["lean-ctx"];
+    assert_eq!(entry["type"], "stdio");
+    assert_eq!(entry["command"], "/bin/lean-ctx");
+    assert_eq!(entry["args"], serde_json::json!([]));
+    assert!(entry.get("lifecycle").is_none(), "OMP has no lifecycle key");
+
+    let again = write_config_with_options(&t, "/bin/lean-ctx", WriteOptions::default()).unwrap();
+    assert_eq!(again.action, WriteAction::Already);
+}
+
+#[test]
 fn codex_toml_upserts_existing_section() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");
@@ -1099,4 +1149,154 @@ fn claude_code_gets_auto_approve() {
         arr.iter().any(|v| v.as_str() == Some("ctx_shell")),
         "ctx_shell must be auto-approved"
     );
+}
+
+// --- CodeWhale (#1402) ------------------------------------------------------
+
+fn codewhale_target(path: PathBuf) -> EditorTarget {
+    EditorTarget {
+        name: "CodeWhale",
+        agent_key: "codewhale".to_string(),
+        config_path: path,
+        detect_path: PathBuf::from("/nonexistent"),
+        config_type: ConfigType::CodeWhale,
+    }
+}
+
+#[test]
+fn codewhale_fresh_config_uses_standard_mcp_servers_root_and_bare_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mcp.json");
+
+    let t = codewhale_target(path.clone());
+    let res = write_config(&t, "/usr/local/bin/lean-ctx").unwrap();
+    assert_eq!(res.action, WriteAction::Created);
+
+    let json: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(
+        json["mcpServers"]["lean-ctx"]["command"],
+        "/usr/local/bin/lean-ctx"
+    );
+    assert!(
+        json["mcpServers"]["lean-ctx"].get("args").is_none(),
+        "CodeWhale runs lean-ctx as a bare binary"
+    );
+    assert!(
+        json["mcpServers"]["lean-ctx"].get("autoApprove").is_none(),
+        "autoApprove is not part of CodeWhale's documented entry schema"
+    );
+    assert!(
+        json["mcpServers"]["lean-ctx"].get("instructions").is_none(),
+        "CodeWhale validation fails closed on unknown fields"
+    );
+    assert!(json.get("servers").is_none());
+}
+
+#[test]
+fn codewhale_merges_into_existing_servers_root_without_adding_a_second_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mcp.json");
+    std::fs::write(
+        &path,
+        r#"{ "servers": { "other": { "command": "other-bin", "args": ["--x"] } }, "connect_timeout": 30 }"#,
+    )
+    .unwrap();
+
+    let t = codewhale_target(path.clone());
+    let res = write_config(&t, "/usr/local/bin/lean-ctx").unwrap();
+    assert_eq!(res.action, WriteAction::Updated);
+
+    let json: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(
+        json["servers"]["lean-ctx"]["command"],
+        "/usr/local/bin/lean-ctx"
+    );
+    assert_eq!(json["servers"]["other"]["command"], "other-bin");
+    assert_eq!(json["servers"]["other"]["args"][0], "--x");
+    assert_eq!(json["connect_timeout"], 30, "unrelated config must survive");
+    assert!(
+        json.get("mcpServers").is_none(),
+        "a competing second root would leave lean-ctx in the ignored half of the file"
+    );
+}
+
+#[test]
+fn codewhale_merges_into_existing_mcp_servers_root() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mcp.json");
+    std::fs::write(
+        &path,
+        r#"{ "mcpServers": { "other": { "command": "other-bin" } } }"#,
+    )
+    .unwrap();
+
+    let t = codewhale_target(path.clone());
+    assert_eq!(
+        write_config(&t, "/usr/local/bin/lean-ctx").unwrap().action,
+        WriteAction::Updated
+    );
+
+    let json: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(
+        json["mcpServers"]["lean-ctx"]["command"],
+        "/usr/local/bin/lean-ctx"
+    );
+    assert_eq!(json["mcpServers"]["other"]["command"], "other-bin");
+    assert!(json.get("servers").is_none());
+}
+
+#[test]
+fn codewhale_prefers_servers_when_a_config_carries_both_roots() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mcp.json");
+    std::fs::write(&path, r#"{ "mcpServers": {}, "servers": {} }"#).unwrap();
+
+    let t = codewhale_target(path.clone());
+    write_config(&t, "/usr/local/bin/lean-ctx").unwrap();
+
+    let json: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(
+        json["servers"]["lean-ctx"]["command"],
+        "/usr/local/bin/lean-ctx"
+    );
+    assert!(json["mcpServers"].as_object().unwrap().is_empty());
+}
+
+#[test]
+fn codewhale_write_is_idempotent() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("mcp.json");
+
+    let t = codewhale_target(path.clone());
+    assert_eq!(
+        write_config(&t, "/usr/local/bin/lean-ctx").unwrap().action,
+        WriteAction::Created
+    );
+    assert_eq!(
+        write_config(&t, "/usr/local/bin/lean-ctx").unwrap().action,
+        WriteAction::Already
+    );
+}
+
+#[test]
+fn codewhale_removal_visits_both_roots() {
+    let dir = tempfile::tempdir().unwrap();
+
+    for root in ["servers", "mcpServers"] {
+        let path = dir.path().join(format!("{root}-mcp.json"));
+        std::fs::write(
+            &path,
+            format!(r#"{{ "{root}": {{ "other": {{ "command": "other-bin" }} }} }}"#),
+        )
+        .unwrap();
+
+        let t = codewhale_target(path.clone());
+        write_config(&t, "/usr/local/bin/lean-ctx").unwrap();
+        let res = remove_lean_ctx_server(&t, WriteOptions::default()).unwrap();
+        assert_eq!(res.action, WriteAction::Updated, "root {root}");
+
+        let json: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(json[root].get("lean-ctx").is_none(), "root {root}");
+        assert_eq!(json[root]["other"]["command"], "other-bin", "root {root}");
+    }
 }

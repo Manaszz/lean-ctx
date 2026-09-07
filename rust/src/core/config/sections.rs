@@ -159,9 +159,18 @@ pub struct AgentsConfig {
     pub scratchpad_default_ttl_hours: u64,
     /// Logical session timeout (seconds).
     pub logical_session_ttl_seconds: u64,
-    /// Hard per-project cap for simultaneously admitted MCP workers (1–15).
-    /// This is admission control, not a queue or scheduler.
+    /// Machine-wide cap for simultaneously admitted MCP workers (1–15).
     pub max_concurrent_workers: usize,
+    /// Machine-wide cap for workers whose role can mutate project state.
+    pub max_concurrent_mutating_workers: usize,
+    /// Active worker lease. Missing heartbeats release capacity automatically.
+    pub active_worker_lease_seconds: u64,
+    /// Serialize build/test commands across all lean-ctx sessions.
+    pub serialize_build_commands: bool,
+    /// Cargo compiler processes per admitted build.
+    pub cargo_build_jobs: usize,
+    /// Reuse one machine-wide Cargo target directory across agent sessions.
+    pub shared_cargo_target: bool,
     /// Max scratchpad entries before oldest are evicted.
     pub max_scratchpad_entries: usize,
 }
@@ -174,7 +183,12 @@ impl Default for AgentsConfig {
             presence_ttl_hours: 24,
             scratchpad_default_ttl_hours: 12,
             logical_session_ttl_seconds: 180,
-            max_concurrent_workers: 15,
+            max_concurrent_workers: 12,
+            max_concurrent_mutating_workers: 4,
+            active_worker_lease_seconds: 120,
+            serialize_build_commands: true,
+            cargo_build_jobs: 3,
+            shared_cargo_target: true,
             max_scratchpad_entries: 200,
         }
     }
@@ -192,7 +206,12 @@ mod agents_config_tests {
         assert_eq!(cfg.presence_ttl_hours, 24);
         assert_eq!(cfg.scratchpad_default_ttl_hours, 12);
         assert_eq!(cfg.logical_session_ttl_seconds, 180);
-        assert_eq!(cfg.max_concurrent_workers, 15);
+        assert_eq!(cfg.max_concurrent_workers, 12);
+        assert_eq!(cfg.max_concurrent_mutating_workers, 4);
+        assert_eq!(cfg.active_worker_lease_seconds, 120);
+        assert!(cfg.serialize_build_commands);
+        assert_eq!(cfg.cargo_build_jobs, 3);
+        assert!(cfg.shared_cargo_target);
         assert_eq!(cfg.max_scratchpad_entries, 200);
     }
 
@@ -885,6 +904,67 @@ pub struct CostConfig {
     pub prices: HashMap<String, PriceOverride>,
 }
 
+/// User-controlled never-lossy zones (`[protection]`, #1570 P4).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProtectionConfig {
+    /// Glob patterns matched against a call's path-like arguments (`path`,
+    /// `file_path`, `filePath`). A hit exempts the call's output from every
+    /// lossy filter (triage), same standard as `raw=true`. Lossless paths
+    /// (archive + ctx_expand) are unaffected — protection means "never
+    /// lossy", not "never compressed".
+    pub file_patterns: Vec<String>,
+    /// Honor inline `<protect>` spans: any tool output containing the tag
+    /// bypasses lossy line filtering, and history pruning leaves the
+    /// matching tool result verbatim.
+    pub tags: bool,
+}
+
+impl Default for ProtectionConfig {
+    fn default() -> Self {
+        Self {
+            file_patterns: Vec::new(),
+            tags: true,
+        }
+    }
+}
+
+impl ProtectionConfig {
+    /// Whether `path` matches a protected glob. Invalid patterns are ignored.
+    pub fn path_is_protected(&self, path: &str) -> bool {
+        !path.is_empty()
+            && self
+                .file_patterns
+                .iter()
+                .filter_map(|p| glob::Pattern::new(p).ok())
+                .any(|pattern| pattern.matches(path))
+    }
+}
+
+#[cfg(test)]
+mod protection_tests {
+    use super::ProtectionConfig;
+
+    #[test]
+    fn protected_globs_match_paths_and_ignore_invalid_patterns() {
+        let cfg = ProtectionConfig {
+            file_patterns: vec![
+                "docs/audits/**".into(),
+                "*.secret.md".into(),
+                "[invalid".into(),
+            ],
+            tags: true,
+        };
+        assert!(cfg.path_is_protected("docs/audits/q3/blockers.md"));
+        assert!(cfg.path_is_protected("notes.secret.md"));
+        assert!(!cfg.path_is_protected("src/main.rs"));
+        assert!(!cfg.path_is_protected(""));
+
+        let empty = ProtectionConfig::default();
+        assert!(!empty.path_is_protected("docs/audits/q3/blockers.md"));
+        assert!(empty.tags, "protect tags are honored by default");
+    }
+}
 /// MCP decision-loop runtime settings (`[decision_loop]`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]

@@ -224,6 +224,35 @@ pub fn qoderwork_mcp_path(home: &Path) -> PathBuf {
     home.join(".qoderwork/mcp.json")
 }
 
+/// Oh My Pi's user-level agent directory.
+///
+/// OMP keeps its native MCP config (`mcp.json`) and its user instruction file
+/// (`AGENTS.md`) together under `~/.omp/agent`. `PI_CODING_AGENT_DIR` is OMP's
+/// documented *full* override of that directory: when it is set, OMP itself
+/// reads from there, so lean-ctx must write to the very same place instead of
+/// re-deriving a path under `$HOME`.
+pub fn omp_agent_dir(home: &Path) -> PathBuf {
+    omp_agent_dir_from(home, std::env::var("PI_CODING_AGENT_DIR").ok().as_deref())
+}
+
+/// Env-free core of [`omp_agent_dir`] so the override semantics stay testable
+/// without mutating process-global environment state. A blank/whitespace-only
+/// override is not a usable directory and falls back to the default layout.
+pub(crate) fn omp_agent_dir_from(home: &Path, override_dir: Option<&str>) -> PathBuf {
+    if let Some(explicit) = override_dir.map(str::trim).filter(|dir| !dir.is_empty()) {
+        return PathBuf::from(explicit);
+    }
+    home.join(".omp/agent")
+}
+
+pub fn omp_mcp_path(home: &Path) -> PathBuf {
+    omp_agent_dir(home).join("mcp.json")
+}
+
+pub fn omp_agents_path(home: &Path) -> PathBuf {
+    omp_agent_dir(home).join("AGENTS.md")
+}
+
 /// Qoder CLI stores user-scoped MCP servers in the shared Qoder settings file.
 /// This is intentionally separate from Qoder IDE's `mcp.json` locations: the
 /// two applications use the same `.qoder` state directory but do not consume
@@ -272,6 +301,136 @@ pub fn codebuddy_state_dir(home: &Path) -> PathBuf {
 
 pub fn codebuddy_rules_dir(home: &Path) -> PathBuf {
     codebuddy_state_dir(home).join("rules")
+}
+
+/// CodeWhale's user-level MCP config (GH #1402).
+///
+/// Upstream resolution order (CodeWhale `docs/MCP.md`, verified 2026-09-07):
+///   1. `DEEPSEEK_MCP_CONFIG` — explicit override, still carrying the
+///      pre-rename env var name.
+///   2. `~/.codewhale/mcp.json` — current path.
+///   3. `~/.deepseek/mcp.json` — legacy path, read only while the CodeWhale
+///      file is absent.
+///
+/// We mirror that order exactly so `init`/`setup`/`doctor`/`uninstall` all
+/// touch the one file CodeWhale actually reads. Writing both would leave a
+/// lean-ctx entry in the shadowed file that the user never sees loaded and
+/// that a later `uninstall` of the other path would not explain.
+pub fn codewhale_mcp_json_path(home: &Path) -> PathBuf {
+    resolve_codewhale_mcp_path(home, std::env::var("DEEPSEEK_MCP_CONFIG").ok().as_deref())
+}
+
+/// Pure resolver behind [`codewhale_mcp_json_path`] — the env lookup is lifted
+/// to the caller so tests can cover the override without mutating process env
+/// (which races under the parallel test harness).
+fn resolve_codewhale_mcp_path(home: &Path, explicit_override: Option<&str>) -> PathBuf {
+    if let Some(explicit) = explicit_override {
+        let explicit = explicit.trim();
+        if !explicit.is_empty() {
+            return PathBuf::from(explicit);
+        }
+    }
+    let current = codewhale_dir(home).join("mcp.json");
+    if current.exists() {
+        return current;
+    }
+    let legacy = codewhale_legacy_dir(home).join("mcp.json");
+    if legacy.exists() {
+        return legacy;
+    }
+    current
+}
+
+/// `~/.codewhale` — CodeWhale's current config dir (`config.toml`, `mcp.json`).
+pub fn codewhale_dir(home: &Path) -> PathBuf {
+    home.join(".codewhale")
+}
+
+/// `~/.deepseek` — CodeWhale's pre-rename config dir, still honoured upstream
+/// as a read-only fallback.
+pub fn codewhale_legacy_dir(home: &Path) -> PathBuf {
+    home.join(".deepseek")
+}
+
+#[cfg(test)]
+mod codewhale_tests {
+    use super::*;
+
+    #[test]
+    fn defaults_to_codewhale_dir_when_nothing_exists() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let home = tmp.path();
+        assert_eq!(
+            resolve_codewhale_mcp_path(home, None),
+            home.join(".codewhale").join("mcp.json")
+        );
+    }
+
+    #[test]
+    fn prefers_existing_codewhale_config_over_legacy() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let home = tmp.path();
+        for dir in [".codewhale", ".deepseek"] {
+            std::fs::create_dir_all(home.join(dir)).expect("create dir");
+            std::fs::write(home.join(dir).join("mcp.json"), "{}").expect("write cfg");
+        }
+        assert_eq!(
+            resolve_codewhale_mcp_path(home, None),
+            home.join(".codewhale").join("mcp.json"),
+            "current path must win so we never write into the shadowed legacy file"
+        );
+    }
+
+    #[test]
+    fn falls_back_to_legacy_deepseek_config_when_only_it_exists() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let home = tmp.path();
+        std::fs::create_dir_all(home.join(".deepseek")).expect("create dir");
+        std::fs::write(home.join(".deepseek").join("mcp.json"), "{}").expect("write cfg");
+        assert_eq!(
+            resolve_codewhale_mcp_path(home, None),
+            home.join(".deepseek").join("mcp.json")
+        );
+    }
+
+    #[test]
+    fn explicit_override_wins_and_blank_is_ignored() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let home = tmp.path();
+        let explicit = home.join("custom").join("mcp.json");
+        assert_eq!(
+            resolve_codewhale_mcp_path(home, Some(&explicit.to_string_lossy())),
+            explicit
+        );
+        assert_eq!(
+            resolve_codewhale_mcp_path(home, Some("   ")),
+            home.join(".codewhale").join("mcp.json")
+        );
+    }
+
+    #[test]
+    fn detect_path_accepts_either_config_dir() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let home = tmp.path();
+        assert_eq!(codewhale_detect_path(home), home.join(".codewhale"));
+        std::fs::create_dir_all(home.join(".deepseek")).expect("create dir");
+        assert_eq!(codewhale_detect_path(home), home.join(".deepseek"));
+        std::fs::create_dir_all(home.join(".codewhale")).expect("create dir");
+        assert_eq!(codewhale_detect_path(home), home.join(".codewhale"));
+    }
+}
+
+/// Detection marker for CodeWhale: either config dir counts as "installed".
+pub fn codewhale_detect_path(home: &Path) -> PathBuf {
+    let current = codewhale_dir(home);
+    if current.exists() {
+        return current;
+    }
+    let legacy = codewhale_legacy_dir(home);
+    if legacy.exists() {
+        return legacy;
+    }
+    current
 }
 
 pub fn augment_cli_settings_path(home: &Path) -> PathBuf {
@@ -430,5 +589,46 @@ mod tests {
                 home.join("Library/Application Support/Qoder/SharedClientCache/mcp.json"),
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod omp_path_tests {
+    use super::{omp_agent_dir_from, omp_agents_path, omp_mcp_path};
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn omp_defaults_to_the_native_agent_dir() {
+        assert_eq!(
+            omp_agent_dir_from(Path::new("/home/tester"), None),
+            PathBuf::from("/home/tester/.omp/agent")
+        );
+    }
+
+    #[test]
+    fn pi_coding_agent_dir_is_a_full_override() {
+        assert_eq!(
+            omp_agent_dir_from(Path::new("/home/tester"), Some("/elsewhere/omp-agent")),
+            PathBuf::from("/elsewhere/omp-agent")
+        );
+    }
+
+    #[test]
+    fn blank_override_falls_back_to_the_default_layout() {
+        let home = Path::new("/home/tester");
+        assert_eq!(
+            omp_agent_dir_from(home, Some("   ")),
+            omp_agent_dir_from(home, None)
+        );
+    }
+
+    #[test]
+    fn omp_config_and_rules_share_one_agent_dir() {
+        // Env-robust: compares the two paths against each other, so it holds
+        // with or without a PI_CODING_AGENT_DIR override in the environment.
+        let home = Path::new("/home/tester");
+        assert_eq!(omp_mcp_path(home).parent(), omp_agents_path(home).parent());
+        assert_eq!(omp_mcp_path(home).file_name().unwrap(), "mcp.json");
+        assert_eq!(omp_agents_path(home).file_name().unwrap(), "AGENTS.md");
     }
 }

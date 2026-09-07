@@ -5,6 +5,53 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Added — cache-safe conversation management
+
+- Errored tool inputs are deterministically purged only after they enter the
+  mutable old-history region; error results remain intact, and stepped,
+  deduplicated budget nudges replace repeated warnings (#1570 P2/P5/P6).
+- User-controlled protected spans, file globs, and recent-turn windows now
+  prevent every lossy path from rewriting designated context (#1570 P4).
+- `ctx_session compact` and `restore` provide validated, rate-limited,
+  reversible range compression backed by CCR without mutating cached prefixes
+  (#1570 P1/P3).
+
+### Fixed — stale sibling-project index
+
+- A project indexed through `path` (`ctx_compose(path=…)`, `ctx_search(path=…)`)
+  no longer keeps answering from the tree it had at its first build. The fast
+  staleness check now records the mtime of every indexed directory, so files
+  added after that build are detected with one stat per directory instead of
+  being invisible to the sampled file check, and the resident-cache miss path
+  validates the persisted index before serving it (#1724).
+
+### Added — CodeWhale agent integration
+
+- `lean-ctx init --agent codewhale` and `setup` now register the lean-ctx MCP
+  server with CodeWhale (#1402). The config path follows CodeWhale's own
+  resolution order — `DEEPSEEK_MCP_CONFIG`, then `~/.codewhale/mcp.json`, then
+  the pre-rename `~/.deepseek/mcp.json` — so exactly one file is written and it
+  is always the one CodeWhale reads. The writer merges into whichever root key
+  the existing config uses (`servers` or `mcpServers`), preserving every other
+  server and unrelated setting, and creates `mcpServers` only for a config it
+  makes itself. `doctor`, shell completions, `--agent` help and `uninstall`
+  (which visits both the current and the legacy path) cover the new agent.
+- Deliberately **not** shipped for CodeWhale: shell hooks and any write to
+  `instructions = [...]`. CodeWhale's hooks are TUI-only with observer/steering
+  semantics rather than the pre-tool rewrite/deny contract lean-ctx's scripts
+  assume, and `instructions` is user-owned upstream. lean-ctx guidance reaches
+  CodeWhale through the shared project `AGENTS.md` block it already auto-loads;
+  no `~/.codewhale/AGENTS.md` is created, because CodeWhale would never read it.
+
+### Changed — machine-wide agent resource control
+
+- Agent admission now defaults to twelve machine-wide leases with a separate
+  four-worker ceiling for mutating roles, rejects duplicate project roles, and
+  releases workers after two minutes without a heartbeat.
+- Shell builds and tests are serialized across sessions; Cargo defaults to
+  three compiler jobs and a shared target cache to avoid CPU, RAM, and disk
+  amplification on multi-session laptops.
+
 ## [3.10.1] — 2026-09-05
 
 ### Fixed — release packaging

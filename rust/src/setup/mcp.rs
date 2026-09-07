@@ -264,6 +264,12 @@ pub(crate) fn agent_mcp_targets(
             crate::core::editor_registry::cline_cli_mcp_settings_path(),
             ConfigType::ClineCli,
         ),
+        "omp" => push(
+            &mut targets,
+            "Oh My Pi",
+            crate::core::editor_registry::omp_mcp_path(home),
+            ConfigType::OmpMcp,
+        ),
         "roo" => push(
             &mut targets,
             "Roo Code",
@@ -302,6 +308,14 @@ pub(crate) fn agent_mcp_targets(
             "Trae",
             home.join(".trae/mcp.json"),
             ConfigType::McpJson,
+        ),
+        // #1402: resolves `~/.codewhale/mcp.json`, or the legacy
+        // `~/.deepseek/mcp.json` when that is the file CodeWhale still reads.
+        "codewhale" => push(
+            &mut targets,
+            "CodeWhale",
+            crate::core::editor_registry::codewhale_mcp_json_path(home),
+            ConfigType::CodeWhale,
         ),
         "amazonq" => push(
             &mut targets,
@@ -536,6 +550,12 @@ pub fn disable_agent_mcp(agent: &str, overwrite_invalid: bool) -> Result<(), Str
             crate::core::editor_registry::cline_cli_mcp_settings_path(),
             ConfigType::ClineCli,
         ),
+        "omp" => push(
+            &mut targets,
+            "Oh My Pi",
+            crate::core::editor_registry::omp_mcp_path(&home),
+            ConfigType::OmpMcp,
+        ),
         "roo" => push(
             &mut targets,
             "Roo Code",
@@ -568,6 +588,14 @@ pub fn disable_agent_mcp(agent: &str, overwrite_invalid: bool) -> Result<(), Str
             "Trae",
             home.join(".trae/mcp.json"),
             ConfigType::McpJson,
+        ),
+        // #1402: same resolution as the enable path — disable must visit the
+        // exact file we wrote, never the shadowed legacy one.
+        "codewhale" => push(
+            &mut targets,
+            "CodeWhale",
+            crate::core::editor_registry::codewhale_mcp_json_path(home.as_ref()),
+            ConfigType::CodeWhale,
         ),
         "amazonq" => push(
             &mut targets,
@@ -671,6 +699,31 @@ mod qodercli_tests {
     }
 
     #[test]
+    fn codewhale_agent_target_uses_codewhale_schema_and_current_path() {
+        // No `~/.codewhale` or `~/.deepseek` exists under this synthetic home,
+        // so resolution must land on the current path, not the legacy one.
+        let home = std::path::Path::new("/home/tester");
+        let targets = agent_mcp_targets("codewhale", home).unwrap();
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].name, "CodeWhale");
+        assert_eq!(targets[0].agent_key, "codewhale");
+        assert_eq!(targets[0].config_type, ConfigType::CodeWhale);
+        assert_eq!(targets[0].config_path, home.join(".codewhale/mcp.json"));
+    }
+
+    #[test]
+    fn codewhale_agent_target_follows_legacy_deepseek_config_when_that_is_the_live_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path();
+        std::fs::create_dir_all(home.join(".deepseek")).unwrap();
+        std::fs::write(home.join(".deepseek/mcp.json"), "{}").unwrap();
+
+        let targets = agent_mcp_targets("codewhale", home).unwrap();
+        assert_eq!(targets[0].config_path, home.join(".deepseek/mcp.json"));
+    }
+
+    #[test]
     fn cline_cli_agent_target_uses_cline_cli_schema() {
         let home = std::path::Path::new("/home/tester");
         let targets = agent_mcp_targets("cline-cli", home).unwrap();
@@ -678,6 +731,36 @@ mod qodercli_tests {
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].name, "Cline CLI");
         assert_eq!(targets[0].config_type, ConfigType::ClineCli);
+    }
+
+    #[test]
+    fn omp_agent_target_uses_the_native_agent_dir_and_schema() {
+        let home = std::path::Path::new("/home/tester");
+        let targets = agent_mcp_targets("omp", home).unwrap();
+
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].name, "Oh My Pi");
+        assert_eq!(
+            targets[0].config_path,
+            crate::core::editor_registry::omp_mcp_path(home)
+        );
+        assert_eq!(targets[0].config_type, ConfigType::OmpMcp);
+        // Default layout only holds when the environment does not relocate the
+        // OMP agent dir; PI_CODING_AGENT_DIR is a documented full override.
+        if std::env::var_os("PI_CODING_AGENT_DIR").is_none() {
+            assert_eq!(targets[0].config_path, home.join(".omp/agent/mcp.json"));
+        }
+    }
+
+    #[test]
+    fn omp_and_pi_stay_separate_setup_targets() {
+        let home = std::path::Path::new("/home/tester");
+        let omp = agent_mcp_targets("omp", home).unwrap();
+        let pi = agent_mcp_targets("pi", home).unwrap();
+        assert!(
+            pi.iter().all(|t| t.config_path != omp[0].config_path),
+            "Oh My Pi must not write into the stock Pi config"
+        );
     }
 
     #[test]

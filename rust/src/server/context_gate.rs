@@ -2,6 +2,24 @@ use crate::core::context_field::{ContextItemId, ContextState};
 use crate::core::context_ledger::{ContextLedger, PressureAction};
 use crate::core::context_overlay::{OverlayOp, OverlayStore};
 
+/// #1570 P4: protected path arguments bypass every lossy output filter.
+pub(super) fn protected_path_requested(
+    args: Option<&serde_json::Map<String, serde_json::Value>>,
+) -> bool {
+    let Some(args) = args else {
+        return false;
+    };
+    let config = crate::core::config::Config::load();
+    if config.protection.file_patterns.is_empty() {
+        return false;
+    }
+    ["path", "file_path", "filePath"].iter().any(|key| {
+        args.get(*key)
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|path| config.protection.path_is_protected(path))
+    })
+}
+
 /// #843: precise, pinned reads (`diff`, `lines:N-M`, `anchored`/`anchored:N-M`)
 /// must pass through every mode-override path untouched — bounce-prevention,
 /// pressure-downgrade, and the graph/knowledge heuristics below must never
@@ -597,6 +615,13 @@ pub fn apply_triage_filter(
         if serde_json::from_str::<serde_json::Value>(&json_portion).is_ok() {
             return (output.to_string(), 0);
         }
+    }
+    // #1570 P4: an explicit <protect> span is a user contract — the whole
+    // output bypasses lossy line filtering (gated on [protection].tags).
+    // Lossless compression (archive digest + ctx_expand) is unaffected:
+    // protection means "never lossy", not "never compressed".
+    if output.contains("<protect>") && crate::core::config::Config::load().protection.tags {
+        return (output.to_string(), 0);
     }
     // Build a set of kept lines for O(1) lookup.
     let keep: std::collections::HashSet<usize> = match level {
@@ -1313,6 +1338,18 @@ mod tests {
         let profile = test_profile(500, 200);
         let output = "fn main() {\n    println!(\"hi\");\n}";
         assert_eq!(apply_triage_filter(output, &profile, 2), (output.into(), 0));
+    }
+
+    // #1570 P4: a <protect> span is a user contract — the whole output is
+    // exempt from lossy filtering at every level.
+    #[test]
+    fn protect_span_bypasses_lossy_filtering_entirely() {
+        let profile = test_profile(700, 200);
+        let output = "// boilerplate noise\n".repeat(30)
+            + "<protect>operational checklist — must stay verbatim</protect>\n";
+        let (filtered, removed) = apply_triage_filter(&output, &profile, 2);
+        assert_eq!(removed, 0, "protected output must lose nothing");
+        assert_eq!(filtered, output);
     }
 
     #[test]

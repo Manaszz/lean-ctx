@@ -7,6 +7,7 @@
 mod amp;
 mod claude;
 mod cline_cli;
+mod codewhale;
 mod codex;
 mod commandcode;
 mod copilot;
@@ -14,6 +15,7 @@ mod crush;
 mod gemini;
 mod hermes;
 mod jetbrains;
+mod omp;
 mod openclaw;
 mod opencode;
 mod qoder;
@@ -31,6 +33,8 @@ pub(crate) use claude::*;
 #[allow(clippy::wildcard_imports)]
 pub(crate) use cline_cli::*;
 #[allow(clippy::wildcard_imports)]
+pub(crate) use codewhale::*;
+#[allow(clippy::wildcard_imports)]
 pub(crate) use codex::*;
 #[allow(clippy::wildcard_imports)]
 pub(crate) use commandcode::*;
@@ -44,6 +48,8 @@ pub(crate) use gemini::*;
 pub(crate) use hermes::*;
 #[allow(clippy::wildcard_imports)]
 pub(crate) use jetbrains::*;
+#[allow(clippy::wildcard_imports)]
+pub(crate) use omp::*;
 #[allow(clippy::wildcard_imports)]
 pub(crate) use openclaw::*;
 #[allow(clippy::wildcard_imports)]

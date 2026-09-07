@@ -40,6 +40,22 @@ fn qodercli_is_configured_for_hybrid_hooks() {
 }
 
 #[test]
+fn omp_is_supported_as_native_mcp_and_rules_integration() {
+    assert!(HYBRID_AGENTS.contains(&"omp"));
+    assert!(!REPLACE_AGENTS.contains(&"omp"));
+    assert!(REFRESH_EXEMPT_HYBRID_AGENTS.contains(&"omp"));
+    assert!(!REFRESHABLE_HOOK_AGENTS.contains(&"omp"));
+    // `init --agent omp` / `wrap omp` must recognise the key.
+    assert!(is_supported_agent("omp"));
+    // OMP installs no hook artifacts, so detection must stay false (and thus
+    // idempotent) even for a home that already has an OMP agent dir.
+    let tmp = unique_tmp_dir("leanctx_omp_hooks");
+    std::fs::create_dir_all(tmp.join(".omp/agent")).unwrap();
+    assert!(!hooks_installed_for("omp", &tmp));
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
 fn qodercli_hooks_are_eligible_for_refresh() {
     assert!(REFRESHABLE_HOOK_AGENTS.contains(&"qodercli"));
     assert!(!REFRESH_EXEMPT_HYBRID_AGENTS.contains(&"qodercli"));
@@ -830,4 +846,23 @@ fn heal_off_env_caps_replace_at_hybrid() {
     crate::test_env::set_var("LEAN_CTX_HEAL", "off");
     assert_eq!(recommend_hook_mode("claude"), HookMode::Hybrid);
     crate::test_env::remove_var("LEAN_CTX_HEAL");
+}
+
+#[test]
+fn mcp_only_agents_are_supported_but_claim_no_hook_surface() {
+    // #1402: CodeWhale must be reported as a first-class `init --agent` target
+    // (so `wrap` points at the working command instead of "unsupported"),
+    // while staying out of the two lists that promise shell hooks.
+    assert!(MCP_ONLY_AGENTS.contains(&"codewhale"));
+    for agent in MCP_ONLY_AGENTS {
+        assert!(is_supported_agent(agent), "`{agent}` must be supported");
+        assert!(
+            !HYBRID_AGENTS.contains(agent),
+            "`{agent}` must not promise shell hooks it does not have"
+        );
+        assert!(
+            !REPLACE_AGENTS.contains(agent),
+            "`{agent}` has no deny infrastructure"
+        );
+    }
 }
