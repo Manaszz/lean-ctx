@@ -293,7 +293,7 @@ function runOnboard(binaryPath) {
   try {
     console.log("");
     console.log("Running onboard (connecting your AI tools)...");
-    execSync(`"${binaryPath}" onboard`, { stdio: "inherit", timeout: 30000 });
+    execSync(`"${binaryPath}" onboard`, { stdio: "ignore", timeout: 30000 });
   } catch {
     // Non-fatal: onboard may fail in restricted envs
   }
