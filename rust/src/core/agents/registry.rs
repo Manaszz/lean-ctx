@@ -80,6 +80,10 @@ fn consumes_worker_capacity(agent: &AgentEntry) -> bool {
     !(agent.agent_type == "mcp" && agent.role.as_deref() == Some("context-engine"))
 }
 
+fn admission_consumes_mutating_capacity(agent_type: &str, role: Option<&str>) -> bool {
+    !(agent_type == "mcp" && role == Some("context-engine")) && role_can_mutate(role)
+}
+
 pub(crate) fn process_identity_matches(
     agent: &AgentEntry,
     compatibility_identities: &ProcessIdentityIndex,
@@ -211,7 +215,7 @@ impl AgentRegistry {
         let limit = max_concurrent_workers();
         ensure_worker_capacity(active_machine_wide, limit, project_root)?;
 
-        if role_can_mutate(role) {
+        if admission_consumes_mutating_capacity(agent_type, role) {
             let active_mutating = self
                 .agents
                 .iter()
@@ -1215,6 +1219,22 @@ mod tests {
 
         agent.role = Some("implementer".to_string());
         assert!(super::consumes_worker_capacity(&agent));
+    }
+
+    #[test]
+    fn resource_broker_context_engine_admission_bypasses_mutating_capacity() {
+        assert!(!super::admission_consumes_mutating_capacity(
+            "mcp",
+            Some("context-engine")
+        ));
+        assert!(!super::admission_consumes_mutating_capacity(
+            "claude",
+            Some("readonly security reviewer")
+        ));
+        assert!(super::admission_consumes_mutating_capacity(
+            "claude",
+            Some("implementer")
+        ));
     }
 
     #[test]
