@@ -3,6 +3,7 @@
 pub mod claude_code;
 pub mod codex;
 pub mod cursor;
+pub mod opencode;
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -20,6 +21,7 @@ pub enum ImportSource {
     ClaudeCode,
     Codex,
     Cursor,
+    OpenCode,
 }
 
 impl ImportSource {
@@ -29,6 +31,7 @@ impl ImportSource {
             Self::ClaudeCode => "claude-code",
             Self::Codex => "codex",
             Self::Cursor => "cursor",
+            Self::OpenCode => "opencode",
         }
     }
 }
