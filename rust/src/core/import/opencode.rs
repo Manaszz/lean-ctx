@@ -9,7 +9,8 @@ use serde_json::{Map, Value};
 use super::{ImportResult, ImportSource, finish_result, process_value, push_error};
 
 const MAX_SESSIONS: i64 = 1_000;
-const MAX_PARTS_PER_SESSION: i64 = 10_000;
+const MAX_SESSION_ROWS_SCANNED: i64 = 10_000;
+const MAX_PARTS: i64 = 10_000;
 
 /// Imports OpenCode history for the current project.
 #[must_use]
@@ -50,7 +51,7 @@ pub fn import_from_db(db_path: &Path, project_root: &Path) -> ImportResult {
     let mut statement = match connection.prepare(
         "SELECT s.id, p.worktree
          FROM session s JOIN project p ON p.id = s.project_id
-         ORDER BY s.id
+         ORDER BY s.time_updated DESC, s.id
          LIMIT ?1",
     ) {
         Ok(statement) => statement,
@@ -62,7 +63,7 @@ pub fn import_from_db(db_path: &Path, project_root: &Path) -> ImportResult {
             return result;
         }
     };
-    let rows = match statement.query_map([MAX_SESSIONS], |row| {
+    let rows = match statement.query_map([MAX_SESSION_ROWS_SCANNED], |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
     }) {
         Ok(rows) => rows,
@@ -74,9 +75,19 @@ pub fn import_from_db(db_path: &Path, project_root: &Path) -> ImportResult {
             return result;
         }
     };
-    for row in rows.flatten() {
-        if canonical_or_lexical(Path::new(&row.1)) == project_root {
-            session_ids.push(row.0);
+    for row in rows {
+        match row {
+            Ok((id, worktree)) if canonical_or_lexical(Path::new(&worktree)) == project_root => {
+                session_ids.push(id);
+                if session_ids.len() >= MAX_SESSIONS as usize {
+                    break;
+                }
+            }
+            Ok(_) => {}
+            Err(_) => push_error(
+                &mut result,
+                "OpenCode contains a malformed session row".to_owned(),
+            ),
         }
     }
     drop(statement);
@@ -84,7 +95,11 @@ pub fn import_from_db(db_path: &Path, project_root: &Path) -> ImportResult {
 
     let mut touched = HashSet::new();
     let mut seen = HashSet::new();
+    let mut parts_remaining = MAX_PARTS;
     for session_id in session_ids {
+        if parts_remaining == 0 {
+            break;
+        }
         let mut statement = match connection.prepare(
             "SELECT m.data, p.data
              FROM message m JOIN part p ON p.message_id = m.id
@@ -101,7 +116,7 @@ pub fn import_from_db(db_path: &Path, project_root: &Path) -> ImportResult {
                 continue;
             }
         };
-        let rows = match statement.query_map(params![session_id, MAX_PARTS_PER_SESSION], |row| {
+        let rows = match statement.query_map(params![session_id, parts_remaining], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         }) {
             Ok(rows) => rows,
@@ -113,7 +128,15 @@ pub fn import_from_db(db_path: &Path, project_root: &Path) -> ImportResult {
                 continue;
             }
         };
-        for row in rows.flatten() {
+        for row in rows {
+            parts_remaining -= 1;
+            let Ok(row) = row else {
+                push_error(
+                    &mut result,
+                    "OpenCode contains a malformed history row".to_owned(),
+                );
+                continue;
+            };
             let (Ok(message), Ok(mut part)) = (
                 serde_json::from_str::<Value>(&row.0),
                 serde_json::from_str::<Value>(&row.1),
@@ -147,13 +170,18 @@ fn importable_part(message: &Value, part: &mut Value, project_root: &Path) -> Op
 
     match part_type.as_str() {
         "text" => {
-            safe_part.insert("text".to_owned(), part.get("text")?.clone());
+            let text = safe_text(part.get("text")?.as_str()?)?;
+            safe_part.insert("text".to_owned(), Value::String(text));
         }
         "tool" => {
             let state = part.get("state")?.as_object()?;
             let mut safe_state = Map::new();
-            if let Some(error) = state.get("error").and_then(Value::as_str) {
-                safe_state.insert("error".to_owned(), Value::String(error.to_owned()));
+            if let Some(error) = state
+                .get("error")
+                .and_then(Value::as_str)
+                .and_then(safe_tool_error)
+            {
+                safe_state.insert("error".to_owned(), Value::String(error));
             }
             if let Some(input) = state.get("input").and_then(Value::as_object) {
                 let mut safe_input = Map::new();
@@ -204,6 +232,68 @@ fn importable_part(message: &Value, part: &mut Value, project_root: &Path) -> Op
     Some(Value::Object(combined))
 }
 
+fn safe_text(text: &str) -> Option<String> {
+    let safe = text
+        .split(['\n', '.', '!', '?'])
+        .map(str::trim)
+        .filter(|snippet| !contains_sensitive_material(snippet))
+        .collect::<Vec<_>>()
+        .join(". ");
+    (!safe.is_empty()).then_some(safe)
+}
+
+fn safe_tool_error(error: &str) -> Option<String> {
+    let error = error.trim();
+    (!error.is_empty() && !contains_sensitive_material(error)).then(|| error.to_owned())
+}
+
+fn contains_sensitive_material(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    let has_secret_marker = [
+        "api key",
+        "api-key",
+        "api_key",
+        "apikey",
+        "access token",
+        "access-token",
+        "access_token",
+        "authorization:",
+        "bearer ",
+        "password",
+        "passwd",
+        "private key",
+        "secret",
+        "token ",
+        "token=",
+        "token:",
+    ]
+    .iter()
+    .any(|marker| lower.contains(marker));
+    has_secret_marker || contains_absolute_path(text)
+}
+
+fn contains_absolute_path(text: &str) -> bool {
+    text.char_indices().any(|(index, character)| {
+        if character == '/' {
+            let previous = text[..index].chars().next_back();
+            let next = text[index + 1..].chars().next();
+            let starts_path = previous.is_none_or(|character| {
+                character.is_whitespace()
+                    || matches!(character, '`' | '\'' | '"' | '(' | '[' | '{' | '=' | ':')
+            });
+            let is_url = previous == Some(':') && next == Some('/');
+            starts_path && next.is_some_and(|character| character != '/') && !is_url
+        } else {
+            let candidate = &text[index..];
+            looks_like_windows_absolute(candidate)
+                && text[..index].chars().next_back().is_none_or(|character| {
+                    character.is_whitespace()
+                        || matches!(character, '`' | '\'' | '"' | '(' | '[' | '{' | '=' | ':')
+                })
+        }
+    })
+}
+
 fn looks_like_windows_absolute(path: &str) -> bool {
     let bytes = path.as_bytes();
     (bytes.len() >= 3
@@ -226,7 +316,7 @@ fn existing_path_is_inside(path: &Path, project_root: &Path) -> bool {
 
 fn project_relative(path: &Path, project_root: &Path) -> Option<String> {
     let raw = path.to_string_lossy();
-    if looks_like_windows_absolute(&raw) {
+    if cfg!(not(windows)) && looks_like_windows_absolute(&raw) {
         return None;
     }
     let joined = if path.is_absolute() {
@@ -277,13 +367,13 @@ mod tests {
     use rusqlite::Connection;
     use tempfile::tempdir;
 
-    use super::{import_from_db, project_relative};
+    use super::{contains_sensitive_material, import_from_db, project_relative};
 
     fn create_fixture(path: &Path, current: &Path, other: &Path) {
         let db = Connection::open(path).unwrap();
         db.execute_batch(
             "CREATE TABLE project (id TEXT PRIMARY KEY, worktree TEXT NOT NULL);
-             CREATE TABLE session (id TEXT PRIMARY KEY, project_id TEXT NOT NULL);
+             CREATE TABLE session (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, time_updated INTEGER NOT NULL);
              CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);
              CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT NOT NULL, session_id TEXT NOT NULL, time_created INTEGER NOT NULL, data TEXT NOT NULL);",
         ).unwrap();
@@ -293,7 +383,7 @@ mod tests {
         )
         .unwrap();
         db.execute(
-            "INSERT INTO session (id, project_id) VALUES ('s1', 'p1'), ('s2', 'p2')",
+            "INSERT INTO session (id, project_id, time_updated) VALUES ('s1', 'p1', 2), ('s2', 'p2', 1)",
             [],
         )
         .unwrap();
@@ -311,7 +401,9 @@ mod tests {
              ('e', 'm2', 's2', 5, '{\"type\":\"tool\",\"tool\":\"read\",\"state\":{\"input\":{\"filePath\":\"other.txt\"}}}'),
              ('f', 'm1', 's1', 6, '{\"type\":\"patch\",\"files\":[\"src/patch.rs\",\"../outside.rs\"]}'),
              ('g', 'm1', 's1', 7, '{\"type\":\"snapshot\",\"path\":\"ignored.txt\"}'),
-             ('h', 'm1', 's1', 8, 'not-json')",
+             ('h', 'm1', 's1', 8, 'not-json'),
+             ('i', 'm1', 's1', 9, '{\"type\":\"text\",\"text\":\"We decided to use /home/alice/private/key. We chose safe fallback.\"}'),
+             ('j', 'm1', 's1', 10, '{\"type\":\"tool\",\"state\":{\"error\":\"Build failed at /home/alice/private/key token=TOP_SECRET\"}}')",
             [],
         ).unwrap();
     }
@@ -370,12 +462,40 @@ mod tests {
                 "ignored.txt",
                 "TOP_SECRET",
                 "PRIVATE_OUTPUT",
+                "/home/alice/private/key",
             ]
             .iter()
             .any(|private| fact.value.contains(private))
                 && fact.source_session == "opencode:s1"
                 && fact.imported_from.as_deref() == Some("opencode")
         }));
+    }
+
+    #[test]
+    fn sensitive_material_filter_handles_punctuation_and_marker_variants() {
+        for value in [
+            "read `/home/user/key`",
+            "read (/home/user/key)",
+            "path=/home/user/key",
+            "read \"/home/user/key\"",
+            "API key abc",
+            "api-key=abc",
+            "access_token=abc",
+            "token abc",
+            "read `C:\\Users\\user\\key`",
+        ] {
+            assert!(contains_sensitive_material(value), "not rejected: {value}");
+        }
+        for value in [
+            "We decided to use a bounded cache",
+            "See https://example.com/path",
+            "relative/path.rs changed",
+        ] {
+            assert!(
+                !contains_sensitive_material(value),
+                "false positive: {value}"
+            );
+        }
     }
 
     #[test]

@@ -353,14 +353,26 @@ fn is_error(text: &str) -> bool {
     .any(|marker| text.contains(marker))
 }
 
-fn truncate(mut value: String) -> String {
-    value.truncate(MAX_FACT_VALUE_CHARS);
-    value.trim().to_owned()
+fn truncate(value: String) -> String {
+    let end = value
+        .char_indices()
+        .map(|(index, _)| index)
+        .find(|&index| index >= MAX_FACT_VALUE_CHARS)
+        .unwrap_or(value.len());
+    value[..end].trim().to_owned()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn truncates_multibyte_facts_without_panicking() {
+        let value = format!("We decided {}", "é".repeat(300));
+        let truncated = truncate(value);
+        assert!(truncated.len() <= MAX_FACT_VALUE_CHARS);
+        assert!(truncated.is_char_boundary(truncated.len()));
+    }
 
     #[test]
     fn extracts_touches_decisions_and_errors() {
