@@ -354,12 +354,14 @@ fn is_error(text: &str) -> bool {
 }
 
 fn truncate(value: &str) -> String {
-    let end = value
-        .char_indices()
-        .map(|(index, _)| index)
-        .find(|&index| index >= MAX_FACT_VALUE_CHARS)
-        .unwrap_or(value.len());
-    value[..end].trim().to_owned()
+    // The first char boundary *at or past* the cap can land one byte over it:
+    // with 2-byte characters starting at an odd offset the boundaries are
+    // 11, 13, … 499, 501, so a 500-byte cap yielded a 501-byte slice. Take the
+    // last boundary at or below the cap instead — the same idiom already used
+    // in `ctx_search` and `ctx_preload`.
+    value[..value.floor_char_boundary(MAX_FACT_VALUE_CHARS)]
+        .trim()
+        .to_owned()
 }
 
 #[cfg(test)]

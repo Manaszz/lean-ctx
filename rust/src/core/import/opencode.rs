@@ -289,6 +289,13 @@ fn looks_like_windows_absolute(path: &str) -> bool {
         || path.starts_with("\\\\")
 }
 
+/// Whether `path` resolves inside `project_root`, following symlinks.
+///
+/// Both sides must be canonical or the comparison is meaningless: on macOS the
+/// temp tree is reached through `/var -> /private/var`, and on Windows
+/// `canonicalize` returns a `\\?\` verbatim path. Canonicalising only the
+/// left-hand side made every path look like an escape on those two platforms.
+/// The root is canonicalised by the caller, so this stays a pure comparison.
 fn existing_path_is_inside(path: &Path, project_root: &Path) -> bool {
     let mut existing = path;
     while !existing.exists() {
@@ -301,6 +308,11 @@ fn existing_path_is_inside(path: &Path, project_root: &Path) -> bool {
 }
 
 fn project_relative(path: &Path, project_root: &Path) -> Option<String> {
+    // Self-defending: `import_from_db` already canonicalises, but this is the
+    // containment check for untrusted paths out of someone else's database, so
+    // it must not depend on a caller having done that. `canonical_or_lexical`
+    // is idempotent on an already-canonical root.
+    let project_root = &canonical_or_lexical(project_root);
     let raw = path.to_string_lossy();
     if cfg!(not(windows)) && looks_like_windows_absolute(&raw) {
         return None;
