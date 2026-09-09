@@ -35,45 +35,37 @@ pub fn import_from_db(db_path: &Path, project_root: &Path) -> ImportResult {
     }
 
     let mut result = ImportResult::default();
-    let connection = match Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
-        Ok(connection) => connection,
-        Err(_) => {
-            push_error(
-                &mut result,
-                "OpenCode history database could not be opened".to_owned(),
-            );
-            return result;
-        }
+    let Ok(connection) = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+    else {
+        push_error(
+            &mut result,
+            "OpenCode history database could not be opened".to_owned(),
+        );
+        return result;
     };
 
     let project_root = canonical_or_lexical(project_root);
     let mut session_ids = Vec::new();
-    let mut statement = match connection.prepare(
+    let Ok(mut statement) = connection.prepare(
         "SELECT s.id, p.worktree
          FROM session s JOIN project p ON p.id = s.project_id
          ORDER BY s.time_updated DESC, s.id
          LIMIT ?1",
-    ) {
-        Ok(statement) => statement,
-        Err(_) => {
-            push_error(
-                &mut result,
-                "OpenCode history schema is not supported".to_owned(),
-            );
-            return result;
-        }
+    ) else {
+        push_error(
+            &mut result,
+            "OpenCode history schema is not supported".to_owned(),
+        );
+        return result;
     };
-    let rows = match statement.query_map([MAX_SESSION_ROWS_SCANNED], |row| {
+    let Ok(rows) = statement.query_map([MAX_SESSION_ROWS_SCANNED], |row| {
         Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-    }) {
-        Ok(rows) => rows,
-        Err(_) => {
-            push_error(
-                &mut result,
-                "OpenCode sessions could not be read".to_owned(),
-            );
-            return result;
-        }
+    }) else {
+        push_error(
+            &mut result,
+            "OpenCode sessions could not be read".to_owned(),
+        );
+        return result;
     };
     for row in rows {
         match row {
@@ -100,33 +92,27 @@ pub fn import_from_db(db_path: &Path, project_root: &Path) -> ImportResult {
         if parts_remaining == 0 {
             break;
         }
-        let mut statement = match connection.prepare(
+        let Ok(mut statement) = connection.prepare(
             "SELECT m.data, p.data
              FROM message m JOIN part p ON p.message_id = m.id
              WHERE m.session_id = ?1
              ORDER BY p.time_created, p.id
              LIMIT ?2",
-        ) {
-            Ok(statement) => statement,
-            Err(_) => {
-                push_error(
-                    &mut result,
-                    "OpenCode messages could not be read".to_owned(),
-                );
-                continue;
-            }
+        ) else {
+            push_error(
+                &mut result,
+                "OpenCode messages could not be read".to_owned(),
+            );
+            continue;
         };
-        let rows = match statement.query_map(params![session_id, parts_remaining], |row| {
+        let Ok(rows) = statement.query_map(params![session_id, parts_remaining], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        }) {
-            Ok(rows) => rows,
-            Err(_) => {
-                push_error(
-                    &mut result,
-                    "OpenCode messages could not be read".to_owned(),
-                );
-                continue;
-            }
+        }) else {
+            push_error(
+                &mut result,
+                "OpenCode messages could not be read".to_owned(),
+            );
+            continue;
         };
         for row in rows {
             parts_remaining -= 1;

@@ -155,7 +155,7 @@ pub(crate) fn process_value(
                 source,
                 session,
                 "imported-observation",
-                format!("Touched file: {path}"),
+                &format!("Touched file: {path}"),
                 0.6,
             );
         }
@@ -173,7 +173,7 @@ pub(crate) fn process_value(
                     source,
                     session,
                     "imported-decision",
-                    decision,
+                    &decision,
                     0.65,
                 );
             }
@@ -185,7 +185,7 @@ pub(crate) fn process_value(
                 source,
                 session,
                 "imported-observation",
-                format!("Observed error: {error}"),
+                &format!("Observed error: {error}"),
                 0.55,
             );
         }
@@ -217,7 +217,7 @@ fn push_fact(
     source: ImportSource,
     session: &str,
     category: &str,
-    value: String,
+    value: &str,
     confidence: f32,
 ) {
     let value = truncate(value);
@@ -353,7 +353,7 @@ fn is_error(text: &str) -> bool {
     .any(|marker| text.contains(marker))
 }
 
-fn truncate(value: String) -> String {
+fn truncate(value: &str) -> String {
     let end = value
         .char_indices()
         .map(|(index, _)| index)
@@ -369,7 +369,7 @@ mod tests {
     #[test]
     fn truncates_multibyte_facts_without_panicking() {
         let value = format!("We decided {}", "é".repeat(300));
-        let truncated = truncate(value);
+        let truncated = truncate(&value);
         assert!(truncated.len() <= MAX_FACT_VALUE_CHARS);
         assert!(truncated.is_char_boundary(truncated.len()));
     }
